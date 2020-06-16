@@ -11,30 +11,34 @@
 
 
 
-#define DATA_GATHERING_PERIOD 128.0
+#define DATA_GATHERING_PERIOD 128.0 // pressure measurements are gathered during that period and then mean is taken
 
 // sound
-#define SPEAKER_PIN 3
+#define SPEAKER_PIN 11
 
 // tones
-#define MAX_SINK_TONE 200     // tone played when the maximum considered threshold is played
-#define BASE_SINK_TONE 400    // tone played when the sink threshold is reached
-#define MIN_SNIFF_TONE 600    // tone played when threshold of sniffing is reached
-#define MIN_CLIMB_TONE 700    // tone played when the minimum climb rate threshold is reached
-#define MAX_CLIMB_TONE 1200   // tone played when the maximym climb rate threshold is reached
+#define MIN_SINK_TONE 300     // tone played when the minimum threshold for sink is reached
+#define MAX_SINK_TONE 100     // tone played when the maximum considered sink threshold is reached
+#define MIN_SNIFF_TONE 450    // tone played when threshold of sniffing is reached
+#define MIN_CLIMB_TONE 500    // tone played when the minimum climb rate threshold is reached
+#define MAX_CLIMB_TONE 2800   // tone played when the maximum climb rate threshold is reached
+
+// tones periods
+#define MIN_CLIMB_TONE_PERIOD 96        // period of playing a tone at the maximum considered climb rate
+#define MAX_CLIMB_TONE_PERIOD 600       // period of playing a tone at the minimum considered climb rate
+#define SINK_PERIOD 1000                // period of playing a sink tone (it's a continuous sound, so it just can't be too short)   
+
+#define CLIMB_TONE_DURATION_COEFF 0.6   // how long a climb tone is played. Regarding the current period
 
 // climb thresholds
-#define MIN_SINK -2.0
-#define MIN_CLIMB 0.1
-#define MAX_CLIMB 4.0
-
-// tones durations (in percentages of sound playing cycle)
-#define TONE_PERIOD 400
-#define CLIMB_TONE_DURATION 300
+#define MIN_SINK -2.0   // climb rate at which it starts being considered as a sink
+#define MAX_SINK -3.5   // below that climb rate sink is not distinguished anymore, because it doesn't matter
+#define MIN_CLIMB 0.1   // minimum climb rate which is considered as a climb
+#define MAX_CLIMB 5.0   // above that climb rate climb is not distinguisehd anymore
 
 // climb states
 #define CLIMB_STATE_SINK -1
-#define CLIMB_STATE_NEUTRAL 0
+#define CLIMB_STATE_GLIDE 0
 #define CLIMB_STATE_CLIMB 1
 
 // display
@@ -44,16 +48,19 @@
 #define DISP_CLIMB_Y 0          // y position at which the current climb rate will be displayed
 #define DISP_MINUS_X 1          // if sink
 #define DISP_MINUS_Y 4          // if sink
-#define HEIGHT_DISP_PERIOD 1000
-#define DISP_ASL_ROW 0
-#define DISP_ASL_COL 0
-#define AVG_CLIMB_PERIOD 300    // how often avg climb is updated
+#define HEIGHT_DISP_PERIOD 500
+#define DISP_ASL_ROW 0          // row starting at which the ASL altitude will be displayed
+#define DISP_ASL_COL 0          // column starting at which the ASL altitude will be displayed
+#define AVG_CLIMB_PERIOD 300    // how often avg climb is updated (just on display, not for beep)
 
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // display digits
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+/*
+  The following arrays represent big digits on the display
+ */
 
 
 
@@ -172,22 +179,24 @@ BMP280 bmp280;              // barometer
 // height & speed
 float heightSum;            // during data gathering period height is summed to calculate avg later
 int numOfMeasures;          // how many measures were taken during the data gathering period
-long lastDataGatherTime;    // time at which the last data gather took place 
-float speedV;               // current vertical speed
+long lastDataGatherTime;    // time at which the last data gathering took place 
+float speedV;               // current vertical speed (climb rate)
 float lastHeight;           // avg height from the previous data gathering
-bool lastClimbState;
-// avg climb for display
-float avgClimb;
-float climbSum;
-int numOfClimbMeasures;
-long lastAvgClimbUpdate;
+int lastClimbState;         // CLIMB_STATE_SINK, CLIMB_STATE_GLIDE, CLIMB_STATE_CLIMB
 
 // sound
-float toneTimeStamp;
+float toneTimeStamp;        // time at which the last tone started
+int currentTonePeriod;      // current period of tones. Decreases as the climb rate increases
 
 // display
 float lastDisplayedClimb;
 long lastHeightDisp;        // time stamp when height was updated
+
+// avg climb for display
+float avgClimb;
+float climbSum;             // sum of measured climbs, used to calculate avg
+int numOfClimbMeasures;     // how many measures of the climb rate were taken in the relevant period
+long lastAvgClimbUpdate;
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -232,7 +241,8 @@ void setup()
 
   // sound
   toneTimeStamp = millis();
-  lastClimbState = CLIMB_STATE_NEUTRAL;
+  lastClimbState = CLIMB_STATE_GLIDE;
+  currentTonePeriod = MAX_CLIMB_TONE_PERIOD;
 
   delay(2000);
   SeeedOled.clearDisplay();
@@ -243,7 +253,7 @@ void setup()
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// main
+// loop
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
@@ -315,21 +325,35 @@ void updateAvgClimb()
 void playBeep()
 {
   int currClimbState = obtainClimbState();
+  currentTonePeriod = obtainTonePeriod();
   
-  if (currClimbState != lastClimbState || millis() - toneTimeStamp >= TONE_PERIOD)
+  if (currClimbState != lastClimbState || millis() - toneTimeStamp >= currentTonePeriod)
   {
-    if (speedV >= MIN_CLIMB)  // if climbs
-    {
-      float climbRangeRatio = min(speedV, MAX_CLIMB) / MAX_CLIMB;
-      int toneRange = MAX_CLIMB_TONE - MIN_CLIMB_TONE;
-      int toneFreq = MIN_CLIMB_TONE + (climbRangeRatio * (float) toneRange);
+    int toneFreq = obtainTone();
 
-      tone(SPEAKER_PIN, toneFreq, CLIMB_TONE_DURATION);
-      lastClimbState = currClimbState;
-    }
+    if (currClimbState = CLIMB_STATE_CLIMB)
+      playClimb(toneFreq);
+    else if (currClimbState == CLIMB_STATE_SINK)
+      playSink(toneFreq);
+      
+    lastClimbState = currClimbState;
     
     toneTimeStamp = millis();
   }
+}
+
+
+
+void playClimb(int toneFreq)
+{
+  tone(SPEAKER_PIN, toneFreq, CLIMB_TONE_DURATION_COEFF * currentTonePeriod);
+}
+
+
+
+void playSink(int toneFreq)
+{
+  tone(SPEAKER_PIN, toneFreq, currentTonePeriod);
 }
 
 
@@ -339,9 +363,51 @@ int obtainClimbState()
   if (speedV <= MIN_SINK)
     return CLIMB_STATE_SINK;
   else if (speedV >= MIN_CLIMB)
-    return CLIMB_STATE_NEUTRAL;
+    return CLIMB_STATE_CLIMB;
   else
-    return CLIMB_STATE_NEUTRAL;
+    return CLIMB_STATE_GLIDE;
+}
+
+
+
+int obtainTonePeriod()
+{
+  int period = MAX_CLIMB_TONE_PERIOD;
+
+  if (speedV >= MIN_CLIMB)
+  {
+    float maxClimbCoeff = 1.0 - min(speedV / MAX_CLIMB, 1.0); // the bigger the climb rate, the smaller the coefficient
+    int periodRange = MAX_CLIMB_TONE_PERIOD - MIN_CLIMB_TONE_PERIOD;
+    period = MIN_CLIMB_TONE_PERIOD + (maxClimbCoeff * (float) periodRange);
+  }
+  else if (speedV <= MIN_SINK)
+  {
+    period = SINK_PERIOD;
+  }
+
+  return period;
+}
+
+
+
+int obtainTone()
+{
+  int toneFreq = 0;
+
+  if (speedV >= MIN_CLIMB)  // sink
+  {
+    float maxClimbCoeff = min(speedV / MAX_CLIMB, 1.0); // the bigger the climb rate, the bigger the coefficient
+    int toneFreqRange = MAX_CLIMB_TONE - MIN_CLIMB_TONE;
+    toneFreq = MIN_CLIMB_TONE + (maxClimbCoeff * (float) toneFreqRange);
+  }
+  else if (speedV <= MIN_SINK)  // climb
+  {
+    float maxSinkCoeff = min((MIN_SINK - speedV) / (MIN_SINK - MAX_SINK), 1.0);  // after the max sink is reached it is 1.0, before <0, 1)
+    int toneFreqRange = MIN_SINK_TONE - MAX_SINK_TONE;
+    toneFreq = MIN_SINK_TONE - (maxSinkCoeff * toneFreqRange);
+  }
+
+  return toneFreq;
 }
 
 
