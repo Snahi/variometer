@@ -21,13 +21,18 @@
 #define MIN_SINK_TONE 300     // tone played when the minimum threshold for sink is reached
 #define MAX_SINK_TONE 100     // tone played when the maximum considered sink threshold is reached
 #define MIN_SNIFF_TONE 450    // tone played when threshold of sniffing is reached
-#define MIN_CLIMB_TONE 500    // tone played when the minimum climb rate threshold is reached
-#define MAX_CLIMB_TONE 2800   // tone played when the maximum climb rate threshold is reached
+#define MIN_CLIMB_TONE 400    // tone played when the minimum climb rate threshold is reached
+#define MAX_CLIMB_TONE 1500   // tone played when the maximum climb rate threshold is reached
+#define CLIMB_TONE_RANGE (MAX_CLIMB_TONE - MIN_CLIMB_TONE)
 
 // tones periods
-#define MIN_CLIMB_TONE_PERIOD 96        // period of playing a tone at the maximum considered climb rate
-#define MAX_CLIMB_TONE_PERIOD 600       // period of playing a tone at the minimum considered climb rate
-#define SINK_PERIOD 1000                // period of playing a sink tone (it's a continuous sound, so it just can't be too short)   
+#define MIN_CLIMB_TONE_PERIOD 40        // period of playing a tone at the maximum considered climb rate
+#define MAX_CLIMB_TONE_PERIOD 400       // period of playing a tone at the minimum considered climb rate
+#define CLIMB_TONE_PERIOD_RANGE (MAX_CLIMB_TONE_PERIOD - MIN_CLIMB_TONE_PERIOD)
+#define SINK_PERIOD 100                 // period of playing a sink tone (it's a continuous sound, so it just can't be too short) 
+#define MAX_PERIOD_BETWEEN_BEEPS 360
+#define MIN_PERIOD_BETWEEN_BEEPS 40
+#define PERIOD_BETWEEN_BEEPS_RANGE (MAX_PERIOD_BETWEEN_BEEPS - MIN_PERIOD_BETWEEN_BEEPS)  
 
 #define CLIMB_TONE_DURATION_COEFF 0.6   // how long a climb tone is played. Regarding the current period
 
@@ -35,7 +40,7 @@
 #define MIN_SINK -2.0   // climb rate at which it starts being considered as a sink
 #define MAX_SINK -3.5   // below that climb rate sink is not distinguished anymore, because it doesn't matter
 #define MIN_CLIMB 0.1   // minimum climb rate which is considered as a climb
-#define MAX_CLIMB 5.0   // above that climb rate climb is not distinguisehd anymore
+#define MAX_CLIMB 3.0   // above that climb rate climb is not distinguisehd anymore
 
 // climb states
 #define CLIMB_STATE_SINK -1
@@ -187,6 +192,9 @@ int heightHistInsIdx;               // index at which the next history will be i
 float speedV;               // current vertical speed (climb rate)
 
 // sound
+long currToneFinishTs;
+int periodBetweenBeeps;
+
 float toneTimeStamp;        // time at which the last tone started
 int currentTonePeriod;      // current period of tones. Decreases as the climb rate increases
 int lastClimbState;         // CLIMB_STATE_SINK, CLIMB_STATE_GLIDE, CLIMB_STATE_CLIMB
@@ -237,6 +245,8 @@ void setup()
   speedV = 0;
 
   // sound
+  currToneFinishTs = 0;
+  
   toneTimeStamp = millis();
   lastClimbState = CLIMB_STATE_GLIDE;
   currentTonePeriod = MAX_CLIMB_TONE_PERIOD;
@@ -338,36 +348,46 @@ void updateVerticalSpeedFromBaro()
  */
 void playBeep()
 {
-  int currClimbState = obtainClimbState();
-  currentTonePeriod = obtainTonePeriod();
-  
-  if (currClimbState != lastClimbState || millis() - toneTimeStamp >= currentTonePeriod)
+  if (millis() > currToneFinishTs)
   {
-    int toneFreq = obtainTone();
+    int newTone = obtainTone();
+    int newTonePeriod = obtainTonePeriod();
+    if (speedV > 0)
+    {
+      playTone(newTone, newTonePeriod);
+      currToneFinishTs = millis() + newTonePeriod + periodBetweenBeeps;
+    }
+    else
+    {
+      playTone(newTone, newTonePeriod);
+      currToneFinishTs = millis() + newTonePeriod;
+    }
 
-    if (currClimbState = CLIMB_STATE_CLIMB)
-      playClimb(toneFreq);
-    else if (currClimbState == CLIMB_STATE_SINK)
-      playSink(toneFreq);
-      
-    lastClimbState = currClimbState;
     
-    toneTimeStamp = millis();
   }
+//  int currClimbState = obtainClimbState();
+//  currentTonePeriod = obtainTonePeriod();
+//  
+//  if (currClimbState != lastClimbState || millis() - toneTimeStamp >= currentTonePeriod)
+//  {
+//    int toneFreq = obtainTone();
+//
+//    if (currClimbState = CLIMB_STATE_CLIMB)
+//      playClimb(toneFreq);
+//    else if (currClimbState == CLIMB_STATE_SINK)
+//      playSink(toneFreq);
+//      
+//    lastClimbState = currClimbState;
+//    
+//    toneTimeStamp = millis();
+//  }
 }
 
 
 
-void playClimb(int toneFreq)
+void playTone(int freq, int period)
 {
-  tone(SPEAKER_PIN, toneFreq, CLIMB_TONE_DURATION_COEFF * currentTonePeriod);
-}
-
-
-
-void playSink(int toneFreq)
-{
-  tone(SPEAKER_PIN, toneFreq, currentTonePeriod);
+  tone(SPEAKER_PIN, freq, period);
 }
 
 
@@ -391,8 +411,8 @@ int obtainTonePeriod()
   if (speedV >= MIN_CLIMB)
   {
     float maxClimbCoeff = 1.0 - min(speedV / MAX_CLIMB, 1.0); // the bigger the climb rate, the smaller the coefficient
-    int periodRange = MAX_CLIMB_TONE_PERIOD - MIN_CLIMB_TONE_PERIOD;
-    period = MIN_CLIMB_TONE_PERIOD + (maxClimbCoeff * (float) periodRange);
+    period = MIN_CLIMB_TONE_PERIOD + (maxClimbCoeff * (float) CLIMB_TONE_PERIOD_RANGE);
+    periodBetweenBeeps = MIN_PERIOD_BETWEEN_BEEPS + maxClimbCoeff * (float) PERIOD_BETWEEN_BEEPS_RANGE;
   }
   else if (speedV <= MIN_SINK)
   {
@@ -411,8 +431,8 @@ int obtainTone()
   if (speedV >= MIN_CLIMB)  // sink
   {
     float maxClimbCoeff = min(speedV / MAX_CLIMB, 1.0); // the bigger the climb rate, the bigger the coefficient
-    int toneFreqRange = MAX_CLIMB_TONE - MIN_CLIMB_TONE;
-    toneFreq = MIN_CLIMB_TONE + (maxClimbCoeff * (float) toneFreqRange);
+    Serial.println(maxClimbCoeff);
+    toneFreq = MIN_CLIMB_TONE + (maxClimbCoeff * (float) CLIMB_TONE_RANGE);
   }
   else if (speedV <= MIN_SINK)  // climb
   {
