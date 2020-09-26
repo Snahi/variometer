@@ -6,12 +6,13 @@
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// global variables
+// constants
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-
-
-#define DATA_GATHERING_PERIOD 128.0 // pressure measurements are gathered during that period and then mean is taken
+// vertical speed & height
+#define HEIGHT_READ_PERIOD 200  // period between two height reads
+#define HEIGHT_HIST_SIZE 5
+#define SPEED_CALC_T ((HEIGHT_READ_PERIOD * (HEIGHT_HIST_SIZE - 1)) / 1000.0)
 
 // sound
 #define SPEAKER_PIN 11
@@ -52,12 +53,6 @@
 #define DISP_ASL_ROW 0          // row starting at which the ASL altitude will be displayed
 #define DISP_ASL_COL 0          // column starting at which the ASL altitude will be displayed
 #define AVG_CLIMB_PERIOD 300    // how often avg climb is updated (just on display, not for beep)
-
-
-
-#define HEIGHT_READ_PERIOD 200  // period between two height reads
-#define HEIGHT_HIST_SIZE 5
-#define SPEED_CALC_T ((HEIGHT_READ_PERIOD * (HEIGHT_HIST_SIZE - 1)) / 1000.0)
 
 
 
@@ -335,6 +330,12 @@ void updateVerticalSpeedFromBaro()
 
 
 
+/*
+ * 1. if the previous tone finished
+ * 2.   obtain new tone
+ * 3.   update current tone period
+ * 4.   set the time when the tone will be finished
+ */
 void playBeep()
 {
   int currClimbState = obtainClimbState();
