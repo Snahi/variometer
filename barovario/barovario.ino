@@ -55,6 +55,12 @@
 
 
 
+#define HEIGHT_READ_PERIOD 200  // period between two height reads
+#define HEIGHT_HIST_SIZE 5
+#define SPEED_CALC_T ((HEIGHT_READ_PERIOD * (HEIGHT_HIST_SIZE - 1)) / 1000.0)
+
+
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // display digits
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -176,27 +182,24 @@ const unsigned char nine[DIGIT_ROWS * DIGIT_COLUMNS] = {
 I2Cdev   I2C_M;
 BMP280 bmp280;              // barometer
 
-// height & speed
-float heightSum;            // during data gathering period height is summed to calculate avg later
-int numOfMeasures;          // how many measures were taken during the data gathering period
-long lastDataGatherTime;    // time at which the last data gathering took place 
+// height
+float currHeight;
+long heightUpdTs;                   // time stamp of the most recent height update
+float heightHist[HEIGHT_HIST_SIZE]; // contains 5 last measured heights
+int heightHistInsIdx;               // index at which the next history will be inserted
+
+// speed
 float speedV;               // current vertical speed (climb rate)
-float lastHeight;           // avg height from the previous data gathering
-int lastClimbState;         // CLIMB_STATE_SINK, CLIMB_STATE_GLIDE, CLIMB_STATE_CLIMB
 
 // sound
 float toneTimeStamp;        // time at which the last tone started
 int currentTonePeriod;      // current period of tones. Decreases as the climb rate increases
+int lastClimbState;         // CLIMB_STATE_SINK, CLIMB_STATE_GLIDE, CLIMB_STATE_CLIMB
 
 // display
 float lastDisplayedClimb;
 long lastHeightDisp;        // time stamp when height was updated
 
-// avg climb for display
-float avgClimb;
-float climbSum;             // sum of measured climbs, used to calculate avg
-int numOfClimbMeasures;     // how many measures of the climb rate were taken in the relevant period
-long lastAvgClimbUpdate;
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -221,10 +224,6 @@ void setup()
   
   lastDisplayedClimb = 0.0;
   lastHeightDisp = 0.0;
-  climbSum = 0.0;
-  avgClimb = 0.0;
-  numOfClimbMeasures = 0;
-  lastAvgClimbUpdate = millis();
 
   // barometer
   if (bmp280.init()) 
@@ -233,11 +232,14 @@ void setup()
     SeeedOled.putString("Barometer FAIL");
 
   // height & speed
-  lastDataGatherTime = millis();
-  lastHeight = bmp280.calcAltitude(bmp280.getPressure());
+  currHeight = bmp280.calcAltitude(bmp280.getPressure());
+  heightUpdTs = millis();
+  for (int i = 0; i < HEIGHT_HIST_SIZE; ++i)
+  {
+    heightHist[i] = currHeight;
+  }
+  heightHistInsIdx = 0;
   speedV = 0;
-  heightSum = 0;
-  numOfMeasures = 0;
 
   // sound
   toneTimeStamp = millis();
@@ -260,11 +262,55 @@ void setup()
 
 void loop()
 {
+  updateHeight();
   updateVerticalSpeedFromBaro();
-  updateAvgClimb();
   playBeep();
   displayCurrClimbRate();
   displayCurrHeight();
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// height
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+void updateHeight()
+{
+  long diff = millis() - heightUpdTs;
+  if (diff >= HEIGHT_READ_PERIOD)
+  {
+    currHeight = bmp280.calcAltitude(bmp280.getPressure());
+    heightHist[heightHistInsIdx] = currHeight;
+    heightHistInsIdx = (heightHistInsIdx + 1) % HEIGHT_HIST_SIZE;
+    heightUpdTs = millis();
+  }
+}
+
+
+
+/*
+ * Returns height regarding which the current vertical speed should be calculated (calculated as 
+ * current height minus the result of this function). 
+ * This function must be called AFTER update height, because it uses heightInsIdx and at the moment
+ * of calling this function heightInsIdx must point to the position on which the NEXT height WILL be
+ * inserted.
+ */
+float getPreviousHeight()
+{
+  /* 
+   *  Example:
+   *  Lets assume, that we have a history of size 5 and height was just inserted at index 3, so 
+   *  heightHistInsIdx is equalt to 4 now. We are interested in getting the oldest historical value, 
+   *  which is stored at index 4, so it is the same as the current value of heightHistInsIdx. 
+   *  HeightInsIdx is modulo incremented, so even if the most recent height insert was at the last
+   *  position (4), then heightHistInsIdx points to 0. All we have to do is return the historical
+   *  value at heightHistInsIdx
+   *  
+   */
+   return heightHist[heightHistInsIdx];
 }
 
 
@@ -277,41 +323,8 @@ void loop()
 
 void updateVerticalSpeedFromBaro()
 {
-  float height = bmp280.calcAltitude(bmp280.getPressure());
-  heightSum += height;
-  numOfMeasures += 1;
-  long diff = millis() - lastDataGatherTime;
-  if (diff >= DATA_GATHERING_PERIOD)
-  {
-    float newHeight = heightSum / numOfMeasures;
-    speedV = (newHeight - lastHeight) / (diff / 1000.0);
-    numOfMeasures = 0;
-    heightSum = 0;
-    lastHeight = newHeight;
-    lastDataGatherTime = millis();
-  }
-}
-
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// avg climb
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-
-void updateAvgClimb()
-{
-  climbSum += speedV;
-  numOfClimbMeasures++;
-  
-  if (millis() - lastAvgClimbUpdate >= AVG_CLIMB_PERIOD)
-  {
-    avgClimb = climbSum / (float) numOfClimbMeasures;
-    climbSum = 0.0;
-    numOfClimbMeasures = 0;
-    lastAvgClimbUpdate = millis();
-  }
+    float heightDiff = currHeight - getPreviousHeight();
+    speedV = heightDiff / SPEED_CALC_T; // v = s/t
 }
 
 
@@ -437,12 +450,10 @@ void printSquare(int fill, int row, int col)
 
 void displayCurrClimbRate()
 {
-   float currClimb = round(avgClimb * 10) / 10.0;
-   Serial.println(currClimb);
+   float currClimb = round(speedV * 10) / 10.0;
    if (currClimb != lastDisplayedClimb)
    {
       displayClimbRate(speedV);
-  
       lastDisplayedClimb = currClimb;
    }
 }
@@ -455,7 +466,6 @@ void displayClimbRate(float climbRate)
     int climbFractionPart = abs(((int) (climbRate * 10)) % 10);
 
     printMinus(climbRate);
-
     printBigDigit(climbIntegerPart, DISP_CLIMB_X, DISP_CLIMB_Y);
     
     int dotX = DISP_CLIMB_X + DIGIT_COLUMNS + 1;
@@ -529,7 +539,7 @@ void displayCurrHeight()
     SeeedOled.setTextXY(DISP_ASL_ROW, DISP_ASL_COL);
     SeeedOled.putString("ASL: ");
     SeeedOled.setTextXY(DISP_ASL_ROW + 1, DISP_ASL_COL);
-    SeeedOled.putNumber(lastHeight);
+    SeeedOled.putNumber(currHeight);
     
     lastHeightDisp = millis();
   }
