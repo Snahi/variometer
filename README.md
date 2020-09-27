@@ -25,4 +25,4 @@ This project is an Arduino variometer which obtains the current vertical speed f
 * **-** GND
 
 ## Code
-The code consists of barovario.ino and third party libraries (with small modifications). The barovario.ino file is where the main logic is implemented. The libraries are just interfaces to the barometer and the display. The libraries were taken from Groove, but small modifications were made to them, so for the best results the libraries from the *libraries* directory should be used.
+The code consists of **barovario.ino** and third party libraries (with small modifications). The **barovario.ino** file is where the main logic is implemented. The libraries are just interfaces to the barometer and the display. The libraries were taken from Groove, but small modifications were made to them, so for the best results the libraries from the *libraries* directory should be used.
