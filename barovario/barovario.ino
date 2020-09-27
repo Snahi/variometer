@@ -185,7 +185,7 @@ int heightHistInsIdx;               // index at which the next history will be i
 float speedV; // current vertical speed (climb rate)
 
 // sound
-long currToneFinishTs;
+long currToneFinishTs; // timestamp at which the currently played tone will be finished
 
 // display
 float lastDisplayedClimb; // time stamp when the most recent climb was displayed
@@ -324,18 +324,12 @@ void updateVerticalSpeedFromBaro()
 
 
 
-/*
- * 1. if the previous tone finished
- * 2.   obtain new tone
- * 3.   update current tone period
- * 4.   set the time when the tone will be finished
- */
 void playBeep()
 {
   if (millis() > currToneFinishTs)
   {
     int newTone = obtainTone();
-    int periodBetweenBeeps;
+    int periodBetweenBeeps; // how much time should pass after the newTone will be played so that the next tone can be played
     int newTonePeriod = obtainTonePeriod(&periodBetweenBeeps);
     playTone(newTone, newTonePeriod);
     currToneFinishTs = millis() + newTonePeriod + periodBetweenBeeps;
